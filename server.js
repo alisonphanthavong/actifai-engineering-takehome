@@ -12,8 +12,6 @@ const pgclient = new Client({
   database: "actifai",
 });
 
-pgclient.connect();
-
 // Constants
 const PORT = 3000;
 const HOST = "0.0.0.0";
@@ -21,6 +19,9 @@ const HOST = "0.0.0.0";
 async function start() {
   // Seed the database
   await seeder.seedDatabase();
+
+  // Connect the database
+  pgclient.connect();
 
   // App
   const app = express();
@@ -53,9 +54,16 @@ async function start() {
         });
       }
 
-      // Validate sort_by and sort_order parameters
+      // Validate group_by, sort_by and sort_order parameters
+      const validGroupBy = ["user", "group"];
       const validSortBy = ["total_revenue", "avg_revenue"];
       const validSortOrder = ["asc", "desc"];
+
+      if (!validGroupBy.includes(group_by)) {
+        return res.status(400).json({
+          error: `Invalid group_by value. Valid options are 'user' or 'group'.`,
+        });
+      }
       if (!validSortBy.includes(sort_by)) {
         return res.status(400).json({
           error: `Invalid sort_by value. Valid options are 'total_revenue' or 'avg_revenue'.`,
@@ -125,7 +133,7 @@ async function start() {
 
   // This endpoint would be useful to fetch historical monthly sales data for specific users or groups
   // Potential optimizations: add limit and offset to paginate large datasets, validate so that date range cannot exceed a specific range (12 months)
-  // Extension idea: add interval parameters for day, week, and year
+  // Extension ideas: add interval parameters for day, week, and year, accept username or group name as parameters instead of ids
   app.get("/sales/trends", async (req, res) => {
     try {
       const { user_id, group_id, start_date, end_date } = req.query;
@@ -164,7 +172,7 @@ async function start() {
           u.name AS user_name,
           g.id AS group_id,
           g.name AS group_name,
-          DATE_TRUNC('month', s.date) AS period,
+          TO_CHAR(DATE_TRUNC('month', s.date), 'YYYY-MM') AS period,
           COUNT(s.id) AS num_sales,
           SUM(s.amount) AS total_revenue,
           AVG(s.amount) AS avg_revenue
@@ -172,22 +180,34 @@ async function start() {
         JOIN users u ON s.user_id = u.id
         LEFT JOIN user_groups ug ON u.id = ug.user_id
         LEFT JOIN groups g ON ug.group_id = g.id
-        WHERE s.date BETWEEN $1 AND $2
+        WHERE s.date >= $1 AND s.date < $2
       `;
 
-      let values = [startDate, endDate];
+      const values = [startDate, endDate];
+
+      // Validate user_id and group_id
+      if (user_id && !Number.isInteger(Number(user_id))) {
+        return res.status(400).json({
+          error: "Invalid user_id. Must be an integer.",
+        });
+      }
+
+      if (group_id && !Number.isInteger(Number(group_id))) {
+        return res.status(400).json({
+          error: "Invalid group_id. Must be an integer.",
+        });
+      }
 
       // Add filters based on user_id and group_id
       if (user_id) {
         query += ` AND u.id = $3`;
-        values.push(user_id);
+        values.push(Number(user_id));
       }
 
       if (group_id) {
-        // Placeholder for group_id should depend on values length
         const groupParamIndex = user_id ? 4 : 3;
         query += ` AND g.id = $${groupParamIndex}`;
-        values.push(group_id);
+        values.push(Number(group_id));
       }
 
       query += `
